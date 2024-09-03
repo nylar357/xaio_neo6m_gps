@@ -1,0 +1,95 @@
+#include <SoftwareSerial.h>
+#include <TinyGPSPlus.h>
+#include <WiFi.h>
+#include <Ubidots.h>
+
+static const int RXPin = D7, TXPin = D6;
+static const uint32_t GPSBaud = 9600;
+const char WIFI_SSID[]     = "INPUT YOUR WIFI NAME HERE";
+const char WIFI_PASS[]     = "INPUT YOUR WIFI PASSWORD HERE";
+const char UBIDOTS_TOKEN[] = "INPUT YOUR UBIDOTS TOKEN HERE";
+
+SoftwareSerial MySerial(RXPin, TXPin);
+TinyGPSPlus gps;
+Ubidots ubidots(UBIDOTS_TOKEN, UBI_UDP);
+double lat;
+double lng;
+
+void setup() {
+  Serial.begin(115200);
+  MySerial.begin(GPSBaud);
+  ubidots.setDebug(true);    // For observing Ubidots uploading log. You can also change it to "false" for a more simplified serial monitor.
+  Serial.println("\nTinyGPSPlus library version: " + String(TinyGPSPlus::libraryVersion()));
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  while (WiFi.status() != 3) {
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    Serial.println(WiFi.status());
+    delay(5000);
+  }
+
+  /*
+    WL_NO_SHIELD        = 255,    // For compatibility with WiFi Shield library
+    WL_IDLE_STATUS      = 0,
+    WL_NO_SSID_AVAIL    = 1,
+    WL_SCAN_COMPLETED   = 2,
+    WL_CONNECTED        = 3,
+    WL_CONNECT_FAILED   = 4,
+    WL_CONNECTION_LOST  = 5,
+    WL_DISCONNECTED     = 6
+  */
+
+  Serial.println("WiFi is connected!");
+}
+
+void loop() {
+  while (MySerial.available() > 0) {
+    if (gps.encode(MySerial.read())) {
+      getLocation();
+      sendToUbidots();
+      delay(10 * 1000);  // Change the parameter here to modify the interval of getting and uploading location.
+    }
+  }
+
+  if (millis() > 5000 && gps.charsProcessed() < 10) {
+    Serial.println("No GPS detected, please check wiring.");
+  }
+}
+
+void getLocation() {
+  if (gps.location.isValid()) {
+    lat = gps.location.lat();
+    lng = gps.location.lng();
+
+    Serial.print("Location: ");
+    Serial.print(gps.location.lat(), 6);
+    Serial.print(", ");
+    Serial.print(gps.location.lng(), 6);
+    Serial.println();
+  } else {
+    Serial.println("Unable to get location currently");
+  }
+}
+
+void sendToUbidots() {
+  if (lat != 0 && lng != 0) {
+    char charLat[20];
+    char charLng[20];
+    sprintf(charLat, "%.6lf", lat);
+    sprintf(charLng, "%.6lf", lng);
+
+    ubidots.addContext("lat", charLat);
+    ubidots.addContext("lng", charLng);
+    char* context = (char*)malloc(sizeof(char) * 60);
+    ubidots.getContext(context);
+    ubidots.add("position", 1, context);
+
+    if (ubidots.send()) {
+      Serial.println("Values sent");
+    } else {
+      Serial.println("Values not sent");
+    }
+    free(context);
+  }
+}
